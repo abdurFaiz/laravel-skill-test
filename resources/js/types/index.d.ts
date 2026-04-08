@@ -40,3 +40,38 @@ export interface User {
     updated_at: string;
     [key: string]: unknown; // This allows for additional properties...
 }
+
+export interface Post {
+    id: number;
+    title: string;
+    content: string;
+    is_draft: boolean;
+    published_at: string | null;
+    author: {
+        id: number;
+        name: string;
+    };
+}
+
+export interface PaginatedData<T> {
+    data: T[];
+    links: {
+        first: string | null;
+        last: string | null;
+        prev: string | null;
+        next: string | null;
+    };
+    meta: {
+        current_page: number;
+        from: number | null;
+        last_page: number;
+        per_page: number;
+        to: number | null;
+        total: number;
+        links: Array<{
+            url: string | null;
+            label: string;
+            active: boolean;
+        }>;
+    };
+}
