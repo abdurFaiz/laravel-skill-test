@@ -19,7 +19,7 @@ class PostResource extends JsonResource
             'title' => $this->title,
             'content' => $this->content,
             'is_draft' => $this->is_draft,
-            'published_at' => $this->published_at,
+            'published_at' => $this->published_at?->toIso8601String(),
             'author' => [
                 'id' => $this->user->id,
                 'name' => $this->user->name,

@@ -7,11 +7,10 @@ use App\Http\Requests\UpdatePostRequest;
 use App\Http\Resources\PostResource;
 use App\Models\Post;
 use Illuminate\Support\Facades\Gate;
-use Inertia\Inertia;
 
 class PostController extends Controller
 {
-    // 4-1: Public paginated published posts
+    // 4-1: Public paginated published posts — JSON response
     public function index()
     {
         $posts = Post::published()
@@ -19,62 +18,56 @@ class PostController extends Controller
             ->latest('published_at')
             ->paginate(20);
 
-        return Inertia::render('posts/index', [
-            'posts' => PostResource::collection($posts),
-        ]);
+        return PostResource::collection($posts);
     }
 
-    // 4-2: Auth only
+    // 4-2: Auth only — return view name string
     public function create()
     {
-        return Inertia::render('posts/create');
+        return 'posts.create';
     }
 
-    // 4-3: Auth only, validated
+    // 4-3: Auth only, validated — 201 Created with resource
     public function store(StorePostRequest $request)
     {
-        $post = auth()->user()->posts()->create($request->validated());
+        $post = $request->user()->posts()->create($request->validated());
 
-        return redirect()->route('posts.show', $post)->with('success', 'Post created successfully.');
+        return (new PostResource($post->load('user')))
+            ->response()
+            ->setStatusCode(201);
     }
 
-    // 4-4: Single active post, 404 if draft/scheduled
+    // 4-4: Single active post — JSON response, 404 if draft/scheduled
     public function show(Post $post)
     {
         abort_if(!$post->isPublished(), 404);
 
-        return Inertia::render('posts/show', [
-            'post' => new PostResource($post->load('user')),
-        ]);
+        return new PostResource($post->load('user'));
     }
 
-    // 4-5: Author only
+    // 4-5: Author only — return view name string
     public function edit(Post $post)
     {
         Gate::authorize('update', $post);
 
-        return Inertia::render('posts/edit', [
-            'post' => new PostResource($post->load('user')),
-        ]);
+        return 'posts.edit';
     }
 
-    // 4-6: Author only, validated
+    // 4-6: Author only, validated — return updated resource
     public function update(UpdatePostRequest $request, Post $post)
     {
-        Gate::authorize('update', $post);
-
         $post->update($request->validated());
 
-        return redirect()->route('posts.show', $post)->with('success', 'Post updated successfully.');
+        return new PostResource($post->load('user'));
     }
 
-    // 4-7: Author only
+    // 4-7: Author only — 204 No Content
     public function destroy(Post $post)
     {
         Gate::authorize('delete', $post);
 
         $post->delete();
 
-        return redirect()->route('posts.index')->with('success', 'Post deleted successfully.');
+        return response()->noContent();
     }
 }

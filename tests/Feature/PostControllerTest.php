@@ -26,13 +26,17 @@ class PostControllerTest extends TestCase
             'published_at' => now()->subDay(),
         ]);
 
-        $response = $this->get('/posts');
+        $response = $this->getJson('/posts');
 
         $response->assertOk();
-        $response->assertInertia(fn ($page) => $page
-            ->component('posts/index')
-            ->has('posts.data', 20) // 20 per page
-        );
+        $response->assertJsonCount(20, 'data');
+        $response->assertJsonStructure([
+            'data' => [
+                '*' => ['id', 'title', 'content', 'is_draft', 'published_at', 'author'],
+            ],
+            'links',
+            'meta',
+        ]);
     }
 
     public function test_index_excludes_draft_posts(): void
@@ -51,12 +55,10 @@ class PostControllerTest extends TestCase
             'published_at' => now()->subDay(),
         ]);
 
-        $response = $this->get('/posts');
+        $response = $this->getJson('/posts');
 
         $response->assertOk();
-        $response->assertInertia(fn ($page) => $page
-            ->has('posts.data', 1)
-        );
+        $response->assertJsonCount(1, 'data');
     }
 
     public function test_index_excludes_scheduled_posts(): void
@@ -77,12 +79,10 @@ class PostControllerTest extends TestCase
             'published_at' => now()->subDay(),
         ]);
 
-        $response = $this->get('/posts');
+        $response = $this->getJson('/posts');
 
         $response->assertOk();
-        $response->assertInertia(fn ($page) => $page
-            ->has('posts.data', 1)
-        );
+        $response->assertJsonCount(1, 'data');
     }
 
     public function test_index_includes_author_data(): void
@@ -95,15 +95,28 @@ class PostControllerTest extends TestCase
             'published_at' => now()->subDay(),
         ]);
 
-        $response = $this->get('/posts');
+        $response = $this->getJson('/posts');
 
         $response->assertOk();
-        $response->assertInertia(fn ($page) => $page
-            ->has('posts.data.0.author', fn ($author) => $author
-                ->where('name', 'John Doe')
-                ->where('id', $user->id)
-            )
-        );
+        $response->assertJsonPath('data.0.author.name', 'John Doe');
+        $response->assertJsonPath('data.0.author.id', $user->id);
+    }
+
+    public function test_index_returns_20_per_page(): void
+    {
+        $user = User::factory()->create();
+
+        Post::factory()->count(25)->create([
+            'user_id' => $user->id,
+            'is_draft' => false,
+            'published_at' => now()->subDay(),
+        ]);
+
+        $response = $this->getJson('/posts');
+
+        $response->assertOk();
+        $response->assertJsonPath('meta.per_page', 20);
+        $response->assertJsonPath('meta.total', 25);
     }
 
     // =========================================================================
@@ -117,16 +130,14 @@ class PostControllerTest extends TestCase
         $response->assertRedirect('/login');
     }
 
-    public function test_create_returns_page_for_authenticated_user(): void
+    public function test_create_returns_string_for_authenticated_user(): void
     {
         $user = User::factory()->create();
 
         $response = $this->actingAs($user)->get('/posts/create');
 
         $response->assertOk();
-        $response->assertInertia(fn ($page) => $page
-            ->component('posts/create')
-        );
+        $response->assertSee('posts.create');
     }
 
     // =========================================================================
@@ -135,25 +146,29 @@ class PostControllerTest extends TestCase
 
     public function test_store_requires_authentication(): void
     {
-        $response = $this->post('/posts', [
+        $response = $this->postJson('/posts', [
             'title' => 'Test Post',
             'content' => 'Test content',
         ]);
 
-        $response->assertRedirect('/login');
+        $response->assertUnauthorized();
     }
 
-    public function test_store_creates_post_with_valid_data(): void
+    public function test_store_creates_post_and_returns_201(): void
     {
         $user = User::factory()->create();
 
-        $response = $this->actingAs($user)->post('/posts', [
+        $response = $this->actingAs($user)->postJson('/posts', [
             'title' => 'My New Post',
             'content' => 'This is the content of my post.',
             'published_at' => now()->toDateTimeString(),
         ]);
 
-        $response->assertRedirect();
+        $response->assertCreated();
+        $response->assertJsonPath('data.title', 'My New Post');
+        $response->assertJsonStructure([
+            'data' => ['id', 'title', 'content', 'is_draft', 'published_at', 'author'],
+        ]);
         $this->assertDatabaseHas('posts', [
             'title' => 'My New Post',
             'content' => 'This is the content of my post.',
@@ -165,20 +180,23 @@ class PostControllerTest extends TestCase
     {
         $user = User::factory()->create();
 
-        $response = $this->actingAs($user)->post('/posts', []);
+        $response = $this->actingAs($user)->postJson('/posts', []);
 
-        $response->assertSessionHasErrors(['title', 'content']);
+        $response->assertUnprocessable();
+        $response->assertJsonValidationErrors(['title', 'content']);
     }
 
     public function test_store_assigns_authenticated_user_as_author(): void
     {
         $user = User::factory()->create();
 
-        $this->actingAs($user)->post('/posts', [
+        $response = $this->actingAs($user)->postJson('/posts', [
             'title' => 'Authored Post',
             'content' => 'Content here.',
         ]);
 
+        $response->assertCreated();
+        $response->assertJsonPath('data.author.id', $user->id);
         $this->assertDatabaseHas('posts', [
             'title' => 'Authored Post',
             'user_id' => $user->id,
@@ -189,7 +207,7 @@ class PostControllerTest extends TestCase
     // 4-4: posts.show
     // =========================================================================
 
-    public function test_show_returns_published_post(): void
+    public function test_show_returns_published_post_as_json(): void
     {
         $user = User::factory()->create();
         $post = Post::factory()->create([
@@ -198,17 +216,14 @@ class PostControllerTest extends TestCase
             'published_at' => now()->subDay(),
         ]);
 
-        $response = $this->get("/posts/{$post->id}");
+        $response = $this->getJson("/posts/{$post->id}");
 
         $response->assertOk();
-        $response->assertInertia(fn ($page) => $page
-            ->component('posts/show')
-            ->has('post.data', fn ($data) => $data
-                ->where('id', $post->id)
-                ->where('title', $post->title)
-                ->etc()
-            )
-        );
+        $response->assertJsonPath('data.id', $post->id);
+        $response->assertJsonPath('data.title', $post->title);
+        $response->assertJsonStructure([
+            'data' => ['id', 'title', 'content', 'is_draft', 'published_at', 'author'],
+        ]);
     }
 
     public function test_show_returns_404_for_draft_post(): void
@@ -220,7 +235,7 @@ class PostControllerTest extends TestCase
             'published_at' => null,
         ]);
 
-        $response = $this->get("/posts/{$post->id}");
+        $response = $this->getJson("/posts/{$post->id}");
 
         $response->assertNotFound();
     }
@@ -234,9 +249,25 @@ class PostControllerTest extends TestCase
             'published_at' => now()->addDays(5),
         ]);
 
-        $response = $this->get("/posts/{$post->id}");
+        $response = $this->getJson("/posts/{$post->id}");
 
         $response->assertNotFound();
+    }
+
+    public function test_show_includes_author_data(): void
+    {
+        $user = User::factory()->create(['name' => 'Jane Doe']);
+        $post = Post::factory()->create([
+            'user_id' => $user->id,
+            'is_draft' => false,
+            'published_at' => now()->subDay(),
+        ]);
+
+        $response = $this->getJson("/posts/{$post->id}");
+
+        $response->assertOk();
+        $response->assertJsonPath('data.author.name', 'Jane Doe');
+        $response->assertJsonPath('data.author.id', $user->id);
     }
 
     // =========================================================================
@@ -253,7 +284,7 @@ class PostControllerTest extends TestCase
         $response->assertRedirect('/login');
     }
 
-    public function test_edit_returns_page_for_author(): void
+    public function test_edit_returns_string_for_author(): void
     {
         $user = User::factory()->create();
         $post = Post::factory()->create(['user_id' => $user->id]);
@@ -261,9 +292,7 @@ class PostControllerTest extends TestCase
         $response = $this->actingAs($user)->get("/posts/{$post->id}/edit");
 
         $response->assertOk();
-        $response->assertInertia(fn ($page) => $page
-            ->component('posts/edit')
-        );
+        $response->assertSee('posts.edit');
     }
 
     public function test_edit_forbidden_for_non_author(): void
@@ -286,23 +315,24 @@ class PostControllerTest extends TestCase
         $user = User::factory()->create();
         $post = Post::factory()->create(['user_id' => $user->id]);
 
-        $response = $this->put("/posts/{$post->id}", [
+        $response = $this->putJson("/posts/{$post->id}", [
             'title' => 'Updated Title',
         ]);
 
-        $response->assertRedirect('/login');
+        $response->assertUnauthorized();
     }
 
-    public function test_update_allowed_for_author(): void
+    public function test_update_returns_updated_resource_for_author(): void
     {
         $user = User::factory()->create();
         $post = Post::factory()->create(['user_id' => $user->id]);
 
-        $response = $this->actingAs($user)->put("/posts/{$post->id}", [
+        $response = $this->actingAs($user)->putJson("/posts/{$post->id}", [
             'title' => 'Updated Title',
         ]);
 
-        $response->assertRedirect();
+        $response->assertOk();
+        $response->assertJsonPath('data.title', 'Updated Title');
         $this->assertDatabaseHas('posts', [
             'id' => $post->id,
             'title' => 'Updated Title',
@@ -315,7 +345,7 @@ class PostControllerTest extends TestCase
         $otherUser = User::factory()->create();
         $post = Post::factory()->create(['user_id' => $author->id]);
 
-        $response = $this->actingAs($otherUser)->put("/posts/{$post->id}", [
+        $response = $this->actingAs($otherUser)->putJson("/posts/{$post->id}", [
             'title' => 'Hijacked Title',
         ]);
 
@@ -327,11 +357,12 @@ class PostControllerTest extends TestCase
         $user = User::factory()->create();
         $post = Post::factory()->create(['user_id' => $user->id]);
 
-        $response = $this->actingAs($user)->put("/posts/{$post->id}", [
+        $response = $this->actingAs($user)->putJson("/posts/{$post->id}", [
             'title' => '', // required when present
         ]);
 
-        $response->assertSessionHasErrors(['title']);
+        $response->assertUnprocessable();
+        $response->assertJsonValidationErrors(['title']);
     }
 
     // =========================================================================
@@ -343,19 +374,19 @@ class PostControllerTest extends TestCase
         $user = User::factory()->create();
         $post = Post::factory()->create(['user_id' => $user->id]);
 
-        $response = $this->delete("/posts/{$post->id}");
+        $response = $this->deleteJson("/posts/{$post->id}");
 
-        $response->assertRedirect('/login');
+        $response->assertUnauthorized();
     }
 
-    public function test_destroy_allowed_for_author(): void
+    public function test_destroy_returns_no_content_for_author(): void
     {
         $user = User::factory()->create();
         $post = Post::factory()->create(['user_id' => $user->id]);
 
-        $response = $this->actingAs($user)->delete("/posts/{$post->id}");
+        $response = $this->actingAs($user)->deleteJson("/posts/{$post->id}");
 
-        $response->assertRedirect('/posts');
+        $response->assertNoContent();
         $this->assertDatabaseMissing('posts', ['id' => $post->id]);
     }
 
@@ -365,7 +396,7 @@ class PostControllerTest extends TestCase
         $otherUser = User::factory()->create();
         $post = Post::factory()->create(['user_id' => $author->id]);
 
-        $response = $this->actingAs($otherUser)->delete("/posts/{$post->id}");
+        $response = $this->actingAs($otherUser)->deleteJson("/posts/{$post->id}");
 
         $response->assertForbidden();
         $this->assertDatabaseHas('posts', ['id' => $post->id]);

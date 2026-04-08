@@ -162,7 +162,7 @@ class PostTest extends TestCase
     public function test_fillable_fields(): void
     {
         $post = new Post();
-        $expected = ['title', 'content', 'is_draft', 'published_at', 'user_id'];
+        $expected = ['title', 'content', 'is_draft', 'published_at'];
 
         $this->assertEquals($expected, $post->getFillable());
     }
